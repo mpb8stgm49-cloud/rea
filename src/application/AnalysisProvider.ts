@@ -50,6 +50,13 @@ export interface AnalysisExecution {
   readonly limitations: readonly string[];
   /** Provider-owned completeness assessment for caller/callee observations. */
   readonly relationshipCoverage?: RelationshipCoverage;
+  /**
+   * Whether the provider capped an `xrefs` read: true when it reported a
+   * truncation, false when it explicitly reported none. Absent when it reports
+   * nothing, which is not a completeness claim. Never part of Evidence or tool
+   * output.
+   */
+  readonly referencesTruncated?: boolean;
   readonly locations: readonly EvidenceLocation[];
   readonly subject: EvidenceSubjectTarget | null;
 }
@@ -59,6 +66,7 @@ interface CreateAnalysisExecutionOptions {
   readonly analysisProfile?: AnalysisProfileCommitment;
   readonly limitations?: readonly string[];
   readonly relationshipCoverage?: RelationshipCoverage;
+  readonly referencesTruncated?: boolean;
   readonly locations?: readonly EvidenceLocation[];
   readonly subject?: EvidenceSubjectTarget;
 }
@@ -103,6 +111,9 @@ export function createAnalysisExecution(
             options.relationshipCoverage,
           ),
         }),
+    ...(options.referencesTruncated === undefined
+      ? {}
+      : { referencesTruncated: options.referencesTruncated }),
     locations: [...(options.locations ?? [])],
     subject: options.subject ?? null,
   };
@@ -162,6 +173,12 @@ export interface AnalysisClientContext {
   readonly runId: string;
 }
 
+/** One lifecycle owner for descriptor cleanup and abortable inspection work. */
+export interface FileCloseResourceOwner {
+  retain(owner: { close(): Promise<void> }, resource: string): void;
+  run<T>(operation: () => Promise<T>): Promise<T>;
+}
+
 export interface ProviderIdentity {
   readonly id: string;
   readonly name: string;
@@ -176,6 +193,7 @@ export interface AnalysisProfileResolution {
 /** Cancellation context for side-effect-free provider profile resolution. */
 export interface AnalysisProfileResolutionOptions {
   readonly signal?: AbortSignal;
+  readonly fileCloseResources?: FileCloseResourceOwner;
 }
 
 interface CapabilityEffects {
@@ -264,6 +282,12 @@ export type ProviderTargetSupport =
       readonly diagnostics: Readonly<Record<string, JsonValue>>;
     };
 
+/** One owner-observed availability/capability snapshot for provider discovery. */
+export interface AnalysisProviderReadinessSnapshot {
+  readonly availability: ProviderAvailability;
+  readonly capabilities: readonly CapabilityDescriptor[];
+}
+
 /** Deep provider candidate discoverable before one target-bound route is chosen. */
 export interface AnalysisProviderCandidate extends AnalysisProvider {
   resolveAnalysisProfile(
@@ -271,5 +295,10 @@ export interface AnalysisProviderCandidate extends AnalysisProvider {
     options?: AnalysisProfileResolutionOptions,
   ): Promise<Result<AnalysisProfileResolution, AnalysisError>>;
   inspectAvailability(): ProviderAvailability;
+  inspectReadinessSnapshot?(): AnalysisProviderReadinessSnapshot;
   inspectTargetSupport(target: BinaryTarget): ProviderTargetSupport;
+  /** Observe retained candidate cleanup without starting or retrying work. */
+  hasPendingOwnedResources?(): boolean;
+  /** Release candidate resources that are independent of any active client. */
+  closeOwnedResources?(): Promise<Result<null, AnalysisError>>;
 }

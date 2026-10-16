@@ -1,4 +1,5 @@
 import type * as t from "@babel/types";
+import type { JavaScriptOpenReceiverFact } from "./javascriptSemanticAnalysis.js";
 import type { JavaScriptRpcScan } from "./javascriptRpcEndpoints.js";
 
 import type {
@@ -41,6 +42,14 @@ export interface JavaScriptAnalysisAccumulator {
   electronCallPathLimitReached?: boolean;
   readonly references: LocatedJavaScriptFinding<JavaScriptStaticReference>[];
   readonly endpoints: LocatedJavaScriptFinding<JavaScriptStaticEndpoint>[];
+  /** Dynamic targets held until the shared mutation index is requested on demand. */
+  readonly pendingNetworkCalls: {
+    readonly node:
+      | t.CallExpression
+      | t.OptionalCallExpression
+      | t.NewExpression;
+    readonly name: string;
+  }[];
   readonly storage: LocatedJavaScriptFinding<JavaScriptStaticStorage>[];
   readonly roles: LocatedJavaScriptFinding<JavaScriptRolePath>[];
   readonly sourceMaps: JavaScriptStaticAnalysis["source_map_urls"][number][];
@@ -52,6 +61,8 @@ export interface JavaScriptAnalysisAccumulator {
   readonly utilityProcesses: LocatedJavaScriptFinding<ElectronUtilityProcessFinding>[];
   readonly nativeAddonBindings: LocatedJavaScriptFinding<ElectronNativeAddonBindingFinding>[];
   readonly moduleRangeIndex: JavaScriptModuleRangeIndex;
+  /** Binding identities proven as third-parameter loaders of recovered factories. */
+  readonly factoryRequireBindingIds: Set<string>;
   /** `preload` attributes of audio and video elements, which are not scripts. */
   readonly mediaElementPreloads: WeakSet<t.Node>;
   readonly seen: Set<string>;
@@ -64,15 +75,8 @@ export interface JavaScriptFindingContext {
   readonly rpcScan: JavaScriptRpcScan;
   readonly source: string;
   readonly accumulator: JavaScriptAnalysisAccumulator;
-  readonly openReceiverFacts?: ReadonlyMap<
-    number,
-    | "window"
-    | "indexed-db"
-    | "cache-storage"
-    | "local"
-    | "local-indexed-db"
-    | "local-cache-storage"
-  >;
+  readonly vitePreloadDependencyTable: readonly (string | undefined)[] | null;
+  readonly openReceiverFacts?: ReadonlyMap<number, JavaScriptOpenReceiverFact>;
   /** Proven Electron export path segments by root offset. */
   readonly electronBindings?: ReadonlyMap<number, readonly string[]>;
 }
@@ -90,6 +94,8 @@ export interface JavaScriptEndpointInput {
   readonly kind: JavaScriptStaticEndpoint["kind"];
   readonly value: string;
   readonly mechanism: string;
+  readonly interpretation?: "candidate";
+  readonly resolution?: "partial";
 }
 
 /** Values required to append one module-attributable static finding. */
@@ -108,6 +114,7 @@ export const createJavaScriptAnalysisAccumulator = (
 ): JavaScriptAnalysisAccumulator => ({
   references: [],
   endpoints: [],
+  pendingNetworkCalls: [],
   storage: [],
   roles: [],
   sourceMaps: [],
@@ -119,6 +126,7 @@ export const createJavaScriptAnalysisAccumulator = (
   utilityProcesses: [],
   nativeAddonBindings: [],
   moduleRangeIndex: new JavaScriptModuleRangeIndex(sourceLength),
+  factoryRequireBindingIds: new Set(),
   mediaElementPreloads: new WeakSet(),
   seen: new Set(),
   visitedNodes: 0,
